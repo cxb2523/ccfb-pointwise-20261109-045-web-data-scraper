@@ -78,3 +78,55 @@ button:active {
   font-size: 12px;
   color: #666;
 }
+
+hr {
+  border: none;
+  border-top: 1px solid #e2e5e9;
+  margin: 4px 0;
+}
+
+h2 {
+  margin: 0;
+  font-size: 15px;
+}
+
+.scrape-config {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.scrape-config label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  color: #444;
+}
+
+.scrape-config input {
+  width: 110px;
+  border: 1px solid #d0d7de;
+  border-radius: 6px;
+  padding: 6px 8px;
+  font-size: 13px;
+}
+
+button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+#scrapeResult {
+  width: 100%;
+  min-height: 140px;
+  resize: vertical;
+  border: 1px solid #d0d7de;
+  border-radius: 8px;
+  padding: 12px;
+  font-size: 12px;
+  line-height: 1.5;
+  background: #fff;
+  color: #111;
+  outline: none;
+}

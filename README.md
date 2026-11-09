@@ -68,3 +68,113 @@ How it works
 5. Export instantly or auto-send to your destination.
 
 If your workflow depends on getting structured web data quickly and reliably, Web Data Scraper is the practical, professional solution.
+
+# Paginated / Scroll Scrape State Machine
+
+`src/panel.js` sends a `START_SCRAPE` control message (and `CANCEL_SCRAPE` to
+stop one in progress); `src/background.js` runs the actual state machine via
+`runScrapeFSM`, defined in the browser-free core module `src/scrapeFsmCore.js`.
+
+## Message shape
+
+```
+{ type: "START_SCRAPE", payload: { tabId, maxPages, maxIdleRounds, waitTimeoutMs } }
+{ type: "CANCEL_SCRAPE", tabId }
+```
+
+- `maxPages` - stop after this many captured pages/scroll rounds.
+- `maxIdleRounds` - stop once this many *consecutive* rounds add zero new items.
+- `waitTimeoutMs` - how long `WAIT_STABLE` will wait for the DOM to settle after
+  each advance before giving up.
+
+## States
+
+`CAPTURE -> MERGE -> CHECK_NEXT -> ADVANCE -> WAIT_STABLE -> (loop back to CAPTURE)`,
+ending in `DONE` or `ABORTED`:
+
+- **CAPTURE** - read the items currently visible on the page/viewport.
+- **MERGE** - hash each captured item and merge only the ones not already seen
+  into the result set (see "De-duplication" below).
+- **CHECK_NEXT** - decide whether to stop (`exhausted` / `limit`) or continue.
+- **ADVANCE** - click to the next page or scroll further to trigger lazy load.
+- **WAIT_STABLE** - wait for the DOM to stop mutating before the next capture,
+  or time out.
+- **DONE** - finished normally, `reason` is `limit` or `exhausted`.
+- **ABORTED** - stopped early, `reason` is `timeout` or `cancelled`.
+
+## Termination priority: timeout > exhausted > limit
+
+All three automatic stop conditions are evaluated by one function,
+`decideTerminalReason`, so there is a single place that encodes the priority
+instead of three independent checks that could disagree:
+
+1. **timeout** wins first. If `WAIT_STABLE` couldn't confirm the DOM had
+   settled, nothing read after that point can be trusted - reporting it as a
+   tidy `limit`/`exhausted` finish would wrongly imply the collected data is
+   complete.
+2. **exhausted** wins next. Hitting `maxIdleRounds` means several consecutive,
+   confirmed-stable rounds produced zero new items - a confident, content-driven
+   signal that the real end of the list was reached. That's more informative
+   than an arbitrary page-count ceiling.
+3. **limit** is reported only when neither of the above applies. `maxPages` is
+   just a safety cap chosen by the caller, not a statement about the data.
+
+Cancellation (user-driven, via `CANCEL_SCRAPE`) is checked ahead of all three at
+every checkpoint, including right after `CAPTURE` returns but before `MERGE`
+runs. That ordering is what guarantees a cancelled run never writes a
+just-captured, not-yet-reconciled batch into the de-dup set: cancelling always
+freezes the result at the last fully merged round, never a partially merged
+one, and it never triggers another `ADVANCE`/`WAIT_STABLE` round.
+
+## De-duplication by content hash, not array index
+
+Each item is hashed from its own sorted `field=value` pairs (see
+`computeItemHash` in `scrapeFsmCore.js`), and only the hash goes into the `Set`
+used for de-duplication. Scroll-based capture re-reads the live DOM every
+round, and virtualized/infinite-scroll pages routinely reorder or recycle DOM
+nodes for items that were already seen. Deduplicating by array position would
+either recount an item that moved, or silently drop a new item that landed at
+an index a previously-seen item used to occupy. Hashing the item's own content
+makes de-duplication immune to where the item currently sits in the DOM or in
+the capture array.
+
+## Why `WAIT_STABLE` uses MutationObserver + polling, not a fixed sleep
+
+A fixed `sleep(ms)` between "scroll/click next" and "capture again" has to
+guess a single delay that works for every page, every network connection, and
+every device. Lazy-loaded content doesn't load on a fixed schedule: a fast
+connection and a fast device might render in under 100ms, while a slow mobile
+connection or a loaded CPU can take several seconds for the same page. Any
+fixed delay short enough to keep a fast page snappy will under-wait on a slow
+one (capturing before new items exist, producing a false `exhausted`); any
+delay long enough to be safe on a slow connection wastes real time on every
+fast page. Because that rendering latency drifts with factors outside the
+extension's control, `WAIT_STABLE` instead watches the actual DOM for change:
+a `MutationObserver` on `document.body` resets a short "quiet window" timer on
+every mutation, and only resolves `stable: true` once that quiet window
+elapses with no further mutations - whatever that takes on this particular
+page, right now. A separate polling loop only enforces the outer
+`waitTimeoutMs` ceiling to `abort` with `reason: "timeout"` if the page never
+settles; it never itself declares success, so it can't be mistaken for a
+disguised fixed sleep.
+
+## Manual verification (Chrome)
+
+1. Open `chrome://extensions`, enable Developer Mode, choose **Load unpacked**,
+   and select the `src/` directory of this repository.
+2. Open a page with an infinite-scroll or "load more" feed, click the
+   extension icon to open the side panel, then click **Start Scrape**.
+3. Scroll/let it run; watch the status line move through the FSM states, and
+   confirm **Cancel** stops the run immediately while keeping whatever items
+   were merged so far in the results box.
+
+## Running the unit tests (no browser required)
+
+```
+node --test src/test
+```
+
+This exercises `src/scrapeFsmCore.js` directly with simulated page-data arrays
+and stubbed hooks - no `chrome.*` APIs or DOM involved - covering transition
+order, hash-based de-duplication under simulated reflow/reordering, and the
+mutual-exclusion priority between `timeout`, `exhausted`, and `limit`.

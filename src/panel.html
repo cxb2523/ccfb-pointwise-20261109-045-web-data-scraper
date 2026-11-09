@@ -22,6 +22,34 @@
     </div>
 
     <p id="status" class="status"></p>
+
+    <hr />
+
+    <h2>Paginated / Scroll Scrape</h2>
+    <p class="subtitle">Repeatedly captures, merges and de-dupes items while scrolling or paginating.</p>
+
+    <div class="scrape-config">
+      <label>
+        Max pages/scrolls
+        <input id="maxPagesInput" type="number" min="1" value="20" />
+      </label>
+      <label>
+        Max idle rounds
+        <input id="maxIdleRoundsInput" type="number" min="1" value="2" />
+      </label>
+      <label>
+        Wait timeout (ms)
+        <input id="waitTimeoutInput" type="number" min="100" step="100" value="8000" />
+      </label>
+    </div>
+
+    <div class="actions">
+      <button id="startScrapeBtn" type="button">Start Scrape</button>
+      <button id="cancelScrapeBtn" type="button" disabled>Cancel</button>
+    </div>
+
+    <p id="scrapeStatus" class="status"></p>
+    <textarea id="scrapeResult" readonly placeholder="Scraped items will appear here..."></textarea>
   </div>
 
   <script src="panel.js"></script>

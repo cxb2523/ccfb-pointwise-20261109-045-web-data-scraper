@@ -166,3 +166,102 @@ copyBtn.addEventListener("click", copyText);
 refreshBtn.addEventListener("click", extractPageText);
 
 document.addEventListener("DOMContentLoaded", extractPageText);
+
+// --- Paginated / scroll scrape controls -----------------------------------
+// This side only ever sends control messages (START_SCRAPE / CANCEL_SCRAPE)
+// and renders progress/results. The state machine itself lives in
+// background.js (runScrapeFSM), keeping the panel a thin controller.
+
+const startScrapeBtn = document.getElementById("startScrapeBtn");
+const cancelScrapeBtn = document.getElementById("cancelScrapeBtn");
+const maxPagesInput = document.getElementById("maxPagesInput");
+const maxIdleRoundsInput = document.getElementById("maxIdleRoundsInput");
+const waitTimeoutInput = document.getElementById("waitTimeoutInput");
+const scrapeStatusEl = document.getElementById("scrapeStatus");
+const scrapeResultEl = document.getElementById("scrapeResult");
+
+let currentScrapeTabId = null;
+
+function clampPositiveInt(value, fallback) {
+  const n = parseInt(value, 10);
+  return Number.isFinite(n) && n > 0 ? n : fallback;
+}
+
+function setScrapeRunning(running) {
+  startScrapeBtn.disabled = running;
+  cancelScrapeBtn.disabled = !running;
+}
+
+async function startScrape() {
+  const tab = await getActiveTab();
+
+  if (!tab || !tab.id) {
+    scrapeStatusEl.textContent = "No active tab found.";
+    return;
+  }
+
+  if (
+    tab.url &&
+    (tab.url.startsWith("chrome://") ||
+      tab.url.startsWith("edge://") ||
+      tab.url.startsWith("about:") ||
+      tab.url.startsWith("chrome-extension://"))
+  ) {
+    scrapeStatusEl.textContent = "This page does not allow script injection.";
+    return;
+  }
+
+  currentScrapeTabId = tab.id;
+  setScrapeRunning(true);
+  scrapeResultEl.value = "";
+  scrapeStatusEl.textContent = "Starting scrape...";
+
+  // Extends the existing START_SCRAPE payload shape with the three new FSM
+  // tuning fields; tabId is the only other field this payload needs today.
+  const payload = {
+    tabId: tab.id,
+    maxPages: clampPositiveInt(maxPagesInput.value, 20),
+    maxIdleRounds: clampPositiveInt(maxIdleRoundsInput.value, 2),
+    waitTimeoutMs: clampPositiveInt(waitTimeoutInput.value, 8000)
+  };
+
+  try {
+    const response = await chrome.runtime.sendMessage({
+      type: "START_SCRAPE",
+      payload
+    });
+
+    if (!response || !response.ok) {
+      scrapeStatusEl.textContent = `Scrape failed: ${response?.error || "unknown error"}`;
+      return;
+    }
+
+    const { status, reason, items } = response.result;
+    scrapeStatusEl.textContent = `${status} (${reason}) - ${items.length} item(s) collected.`;
+    scrapeResultEl.value = JSON.stringify(items, null, 2);
+  } catch (error) {
+    console.error(error);
+    scrapeStatusEl.textContent = "Scrape failed to start.";
+  } finally {
+    setScrapeRunning(false);
+    currentScrapeTabId = null;
+  }
+}
+
+function cancelScrape() {
+  if (!currentScrapeTabId) return;
+  scrapeStatusEl.textContent = "Cancelling...";
+  chrome.runtime.sendMessage({ type: "CANCEL_SCRAPE", tabId: currentScrapeTabId });
+}
+
+chrome.runtime.onMessage.addListener((message) => {
+  if (message?.type !== "SCRAPE_PROGRESS" || message.tabId !== currentScrapeTabId) {
+    return;
+  }
+
+  const pageInfo = message.meta?.pageCount ? ` (round ${message.meta.pageCount})` : "";
+  scrapeStatusEl.textContent = `${message.state}${pageInfo}...`;
+});
+
+startScrapeBtn.addEventListener("click", startScrape);
+cancelScrapeBtn.addEventListener("click", cancelScrape);
